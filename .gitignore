@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Rust
+target/
+
+# Foundry
+packages/contracts/cache/
+packages/contracts/out/
+packages/contracts/broadcast/
+
+# Docker/local state
+.env
+*.log
+
+# macOS
+.DS_Store

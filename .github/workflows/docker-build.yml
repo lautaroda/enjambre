@@ -1,0 +1,19 @@
+name: docker-build
+
+on:
+  push:
+    paths:
+      - "infra/docker/swarm-node.Dockerfile"
+      - ".github/workflows/docker-build.yml"
+  pull_request:
+    paths:
+      - "infra/docker/swarm-node.Dockerfile"
+      - ".github/workflows/docker-build.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build swarm-node image
+        run: docker build -f infra/docker/swarm-node.Dockerfile -t enjambre/swarm-node:ci .
