@@ -2,66 +2,73 @@
 # Ver docs/roadmap.md. Corre completamente en localhost: NO ejercita el NAT traversal
 # real de hivemind (eso es M0.5, en máquinas separadas).
 #
-# Rough edge conocido: hivemind necesita el peer ID del bootstrap para que los demás
-# nodos se conecten (`--initial_peers`). Ese ID se genera en runtime la primera vez que
-# el bootstrap arranca, así que no se puede hardcodear acá. Flujo:
+# El CLI de petals no tiene un modo "solo DHT, sin bloques": el nodo que arranca con
+# --new_swarm siempre hostea bloques el mismo (y en CPU exige --num_blocks explicito,
+# no lo auto-detecta como haria con una GPU). Por eso no hay un servicio "bootstrap"
+# separado: node-1 (M0.3) / single-node (M0.2) cumplen los dos roles a la vez - anclan
+# el DHT y sirven inferencia.
 #
-#   docker compose -f infra/docker-compose.dev.yml up bootstrap
-#   ./infra/scripts/get-bootstrap-peer.sh        # imprime BOOTSTRAP_MADDR=...
-#   export BOOTSTRAP_MADDR=/ip4/127.0.0.1/tcp/31337/p2p/<peer-id-impreso>
-#   docker compose -f infra/docker-compose.dev.yml up node-1 node-2 node-3
+# Rough edge conocido: los demas nodos necesitan el peer ID del nodo ancla para unirse
+# (--initial_peers). Ese ID se genera en runtime la primera vez que arranca, asi que no
+# se puede hardcodear aca. Flujo para M0.3:
 #
-# M0.2 (un solo nodo con el modelo completo, sin partición):
-#   docker compose -f infra/docker-compose.dev.yml --profile smoke up bootstrap single-node
+#   docker compose -f infra/docker-compose.dev.yml up -d node-1
+#   eval "$(./infra/scripts/get-bootstrap-peer.sh node-1)"   # exporta BOOTSTRAP_MADDR=/dns4/node-1/...
+#   docker compose -f infra/docker-compose.dev.yml up -d node-2 node-3 client
+#
+# M0.2 (un solo nodo con el modelo completo, sin particion):
+#   docker compose -f infra/docker-compose.dev.yml --profile smoke up -d single-node
 
 services:
-  bootstrap:
+  # --- M0.2: smoke test, un solo nodo hostea todos los bloques (bloom-560m tiene 24) ---
+  single-node:
+    profiles: ["smoke"]
     build:
       context: ../..
       dockerfile: infra/docker/swarm-node.Dockerfile
     image: enjambre/swarm-node:dev
     command: >
-      --model bigscience/bloom-560m
+      bigscience/bloom-560m
       --new_swarm
-      --identity_path /root/.hivemind/bootstrap.id
+      --num_blocks 24
+      --identity_path /root/.hivemind/single-node.id
       --host_maddrs /ip4/0.0.0.0/tcp/31337
     ports:
       - "31337:31337"
     volumes:
-      - bootstrap-identity:/root/.hivemind
-
-  # --- M0.2: smoke test, un solo nodo hostea todos los bloques ---
-  single-node:
-    profiles: ["smoke"]
-    image: enjambre/swarm-node:dev
-    depends_on: [bootstrap]
-    command: >
-      --model bigscience/bloom-560m
-      --initial_peers ${BOOTSTRAP_MADDR:?ver instrucciones arriba}
+      - single-node-identity:/root/.hivemind
 
   # --- M0.3: partición en 3 nodos (bloom-560m tiene 24 bloques transformer) ---
   node-1:
+    build:
+      context: ../..
+      dockerfile: infra/docker/swarm-node.Dockerfile
     image: enjambre/swarm-node:dev
-    depends_on: [bootstrap]
     command: >
-      --model bigscience/bloom-560m
-      --initial_peers ${BOOTSTRAP_MADDR:?ver instrucciones arriba}
+      bigscience/bloom-560m
+      --new_swarm
       --block_indices 0:8
+      --identity_path /root/.hivemind/node-1.id
+      --host_maddrs /ip4/0.0.0.0/tcp/31337
+    ports:
+      - "31337:31337"
+    volumes:
+      - node1-identity:/root/.hivemind
 
   node-2:
     image: enjambre/swarm-node:dev
-    depends_on: [bootstrap]
+    depends_on: [node-1]
     command: >
-      --model bigscience/bloom-560m
-      --initial_peers ${BOOTSTRAP_MADDR:?ver instrucciones arriba}
+      bigscience/bloom-560m
+      --initial_peers ${BOOTSTRAP_MADDR:-}
       --block_indices 8:16
 
   node-3:
     image: enjambre/swarm-node:dev
-    depends_on: [bootstrap]
+    depends_on: [node-1]
     command: >
-      --model bigscience/bloom-560m
-      --initial_peers ${BOOTSTRAP_MADDR:?ver instrucciones arriba}
+      bigscience/bloom-560m
+      --initial_peers ${BOOTSTRAP_MADDR:-}
       --block_indices 16:24
 
   # Contenedor "cliente": no corre un server de petals, solo queda disponible para
@@ -71,7 +78,8 @@ services:
     depends_on: [node-1, node-2, node-3]
     entrypoint: ["sleep", "infinity"]
     environment:
-      - BOOTSTRAP_MADDR=${BOOTSTRAP_MADDR:?ver instrucciones arriba}
+      - BOOTSTRAP_MADDR=${BOOTSTRAP_MADDR:-}
 
 volumes:
-  bootstrap-identity:
+  single-node-identity:
+  node1-identity:
