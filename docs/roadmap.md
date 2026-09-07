@@ -16,7 +16,7 @@ Modelo de prueba: `bigscience/bloom-560m` (Petals no soporta GPT-2; alternativa:
 - **M0.2 — Smoke test un solo nodo**: 1 contenedor sirviendo todos los bloques + 1 cliente generando texto.
 - **M0.3 — Partición multi-nodo en una máquina**: bootstrap DHT + 3 nodos con `--block_indices` + cliente, en `docker-compose`. Mide overhead puro del mecanismo (sin ruido de red real).
 - **M0.4 — Harness de corrección**: compara logits de la ruta local plana vs. la ruta distribuida (`benchmarks/correctness_check.py`). Semilla de la capa de verificación.
-- **M0.5 — Latencia de red real**: mismo setup en máquinas separadas — cloud (Hetzner/DigitalOcean) + 1-2 nodos de personas de confianza en paralelo. Es lo único que ejercita el NAT traversal real de hivemind.
+- **M0.5 — Latencia de red real**: mismo setup en máquinas separadas — cloud (Hetzner/DigitalOcean) + 1-2 nodos de personas de confianza en paralelo. Es lo único que ejercita el NAT traversal real de hivemind. Guía paso a paso: [`docs/m0-5-remote-setup.md`](m0-5-remote-setup.md).
 - **M0.6 — Escalar tamaño de modelo en GPU real**: repetir M0.5 con Llama-2-7B o Mixtral-8x7B en GPUs cloud baratas (RunPod/Vast.ai/Lambda).
 - **M0.7 — Reporte de hallazgos**: `docs/phase0-poc-report.md`, recomendación go/no-go para Fase 1.
 
