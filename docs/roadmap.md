@@ -16,19 +16,19 @@ Modelo de prueba: `bigscience/bloom-560m` (Petals no soporta GPT-2; alternativa:
 - **M0.2 — Smoke test un solo nodo**: 1 contenedor sirviendo todos los bloques + 1 cliente generando texto.
 - **M0.3 — Partición multi-nodo en una máquina**: bootstrap DHT + 3 nodos con `--block_indices` + cliente, en `docker-compose`. Mide overhead puro del mecanismo (sin ruido de red real).
 - **M0.4 — Harness de corrección**: compara logits de la ruta local plana vs. la ruta distribuida (`benchmarks/correctness_check.py`). Semilla de la capa de verificación.
-- **M0.5 — Latencia de red real**: mismo setup en máquinas separadas — cloud (Hetzner/DigitalOcean) + 1-2 nodos de personas de confianza en paralelo. Es lo único que ejercita el NAT traversal real de hivemind. Guía paso a paso: [`docs/m0-5-remote-setup.md`](m0-5-remote-setup.md).
-- **M0.6 — Escalar tamaño de modelo en GPU real**: repetir M0.5 con Llama-2-7B o Mixtral-8x7B en GPUs cloud baratas (RunPod/Vast.ai/Lambda).
-- **M0.7 — Reporte de hallazgos**: `docs/phase0-poc-report.md`, recomendación go/no-go para Fase 1.
+- **M0.5 — Latencia de red real** ([#1](https://github.com/lautaroda/enjambre/issues/1)): mismo setup en máquinas separadas — cloud (Hetzner/DigitalOcean) + 1-2 nodos de personas de confianza en paralelo. Es lo único que ejercita el NAT traversal real de hivemind. Guía paso a paso: [`docs/m0-5-remote-setup.md`](m0-5-remote-setup.md).
+- **M0.6 — Escalar tamaño de modelo en GPU real** ([#2](https://github.com/lautaroda/enjambre/issues/2)): repetir M0.5 con Llama-2-7B o Mixtral-8x7B en GPUs cloud baratas (RunPod/Vast.ai/Lambda).
+- **M0.7 — Reporte de hallazgos** ([#3](https://github.com/lautaroda/enjambre/issues/3)): `docs/phase0-poc-report.md`, recomendación go/no-go para Fase 1.
 
 ## Fase 1 — Join permissionless + ledger simple
 
-DHT abierta (hivemind ya lo resuelve) + `packages/ledger-daemon` con una DB simple de créditos (sin blockchain) para validar el loop económico básico. Verificación por redundancia Nivel 2 (fingerprint firmado por hop) si Nivel 1 no alcanza.
+DHT abierta (hivemind ya lo resuelve) + [`packages/ledger-daemon`](../packages/ledger-daemon) con una DB simple de créditos (sin blockchain) para validar el loop económico básico — **implementado**. Pendiente: [`verifier`](https://github.com/lautaroda/enjambre/issues/4) (Nivel 1), [verificación Nivel 2](https://github.com/lautaroda/enjambre/issues/5) (fingerprint firmado por hop) si Nivel 1 no alcanza, y [`client-sdk`](https://github.com/lautaroda/enjambre/issues/6).
 
-## Fase 2 — Contrato de liquidación
+## Fase 2 — Contrato de liquidación ([#7](https://github.com/lautaroda/enjambre/issues/7))
 
 L2 **Base**, pagos en **USDC**, liquidación por lotes vía Merkle root (`UsageLedger.sol`), ventana de disputa de 24-72h. Ver `docs/architecture/04-incentive-ledger.md`.
 
-## Fase 3 — Stake y slashing
+## Fase 3 — Stake y slashing ([#8](https://github.com/lautaroda/enjambre/issues/8))
 
 `StakeManager` + `SlashingModule` — stake para elegibilidad de trabajo de mayor confianza, slashing ante trampa comprobada. Reputación on-chain no transferible, separada del dinero retirable.
 
