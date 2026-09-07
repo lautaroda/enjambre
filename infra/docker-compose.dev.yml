@@ -73,12 +73,16 @@ services:
 
   # Contenedor "cliente": no corre un server de petals, solo queda disponible para
   # correr benchmarks/correctness_check.py adentro (mismo entorno Python que los nodos).
+  # La imagen no incluye el codigo del repo (el Dockerfile solo instala dependencias),
+  # asi que montamos benchmarks/ como bind mount en vez de rebuildear para cada cambio.
   client:
     image: enjambre/swarm-node:dev
     depends_on: [node-1, node-2, node-3]
     entrypoint: ["sleep", "infinity"]
     environment:
       - BOOTSTRAP_MADDR=${BOOTSTRAP_MADDR:-}
+    volumes:
+      - ../benchmarks:/app/benchmarks:ro
 
 volumes:
   single-node-identity:
