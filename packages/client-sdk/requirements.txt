@@ -1,0 +1,7 @@
+# Solo lo necesario para correr tests/ (test_client.py no ejercita el path real
+# de petals - ver README). Para USAR el SDK contra un swarm real hace falta el
+# mismo entorno pesado que swarm-node (torch + petals + hivemind), que no se
+# puede resolver con un pip install -r plano por las mismas razones documentadas
+# en infra/docker/swarm-node.Dockerfile (pkg_resources, commit pineado de
+# hivemind, etc.) - correr dentro de esa imagen, no en este venv.
+pytest
