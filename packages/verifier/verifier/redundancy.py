@@ -15,16 +15,26 @@ class RunResult:
     (ver dispatch.py) - atribuir esto automaticamente a partir de una sesion de
     petals queda para la verificacion Nivel 2 (issue #5), que ademas permite
     acotar la disputa a un solo hop en vez de a la corrida completa.
+
+    had_warnings: si petals/hivemind emitieron algun warning durante esta
+    corrida (ej. MissingBlocksError con reintento). Encontrado corriendo esto
+    contra un swarm real (issue #4): bajo contencion de carga, un nodo puede
+    caerse momentaneamente y volver, y la corrida igual termina devolviendo
+    logits - pero esos logits pueden diverger de una corrida "limpia" sin que
+    nadie haya hecho trampa. Sin esta senal, esas divergencias se contaban
+    como sospechosas igual que una trampa real.
     """
 
     node_ids: list[str]
     logits: object
+    had_warnings: bool = False
 
 
 @dataclass
 class VerificationVerdict:
     credited_node_ids: set[str] = field(default_factory=set)
     suspect_node_ids: set[str] = field(default_factory=set)
+    unreliable_node_ids: set[str] = field(default_factory=set)
     inconclusive: bool = False
 
 
@@ -75,22 +85,34 @@ class RedundancyVerifier:
         for i in range(n):
             groups.setdefault(uf.find(i), []).append(i)
         majority = max(groups.values(), key=len)
-
-        if len(majority) <= n / 2:
-            # empate o nadie coincide con nadie - ningun resultado es confiable,
-            # no se acredita ni se acusa a nadie todavia (revision manual/N+1 corrida)
-            all_node_ids = {node_id for run in runs for node_id in run.node_ids}
-            return VerificationVerdict(suspect_node_ids=all_node_ids, inconclusive=True)
+        inconclusive = len(majority) <= n / 2
+        if inconclusive:
+            # empate o nadie coincide con nadie - no se acredita a nadie todavia
+            majority = []
 
         credited = {node_id for i in majority for node_id in runs[i].node_ids}
+
+        other_indices = [i for i in range(n) if i not in majority]
+        # una corrida que tuvo warnings (ej. un nodo se cayo y volvio a mitad de
+        # camino) no es evidencia de trampa - queda "unreliable", no "suspect"
+        unreliable = {
+            node_id for i in other_indices if runs[i].had_warnings for node_id in runs[i].node_ids
+        }
         suspect = {
             node_id
-            for i in range(n)
-            if i not in majority
+            for i in other_indices
+            if not runs[i].had_warnings
             for node_id in runs[i].node_ids
         }
-        # un nodo que aparece tanto en una corrida creditada como en una sospechosa
-        # (comparte camino con ambos grupos) se queda con el beneficio de la duda
+        # un nodo que aparece tambien en una corrida creditada se queda con el
+        # beneficio de la duda; entre unreliable y suspect, gana unreliable
+        unreliable -= credited
         suspect -= credited
+        suspect -= unreliable
 
-        return VerificationVerdict(credited_node_ids=credited, suspect_node_ids=suspect)
+        return VerificationVerdict(
+            credited_node_ids=credited,
+            suspect_node_ids=suspect,
+            unreliable_node_ids=unreliable,
+            inconclusive=inconclusive,
+        )

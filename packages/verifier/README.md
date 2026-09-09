@@ -9,9 +9,9 @@ solo a los nodos de la corrida (o corridas) que coinciden entre sí vía
 ## Estructura
 
 - `compare.py` — similaridad coseno + norma relativa entre dos vectores de logits. Sin dependencias pesadas (solo `numpy`).
-- `redundancy.py` — `RedundancyVerifier`: agrupa corridas por acuerdo mutuo (union-find) y decide qué nodos se acreditan, cuáles quedan sospechosos, o si el resultado es inconcluyente.
+- `redundancy.py` — `RedundancyVerifier`: agrupa corridas por acuerdo mutuo (union-find) y decide qué nodos se acreditan (`credited_node_ids`), cuáles quedan sospechosos de verdad (`suspect_node_ids`), cuáles divergieron por inestabilidad de red y no por trampa (`unreliable_node_ids`), o si el resultado es inconcluyente.
 - `ledger_client.py` — cliente HTTP mínimo hacia `ledger-daemon` para acreditar el verdict.
-- `dispatch.py` — despacha una misma request a N pipelines reales del swarm en paralelo. **Necesita el mismo entorno que `swarm-node`** (torch + petals) — correr dentro de `infra/docker/swarm-node.Dockerfile`, no en el venv liviano de este paquete.
+- `dispatch.py` — despacha una misma request a N pipelines reales del swarm en paralelo, capturando si petals/hivemind emitieron algún warning durante cada corrida (`RunResult.had_warnings`). **Necesita el mismo entorno que `swarm-node`** (torch + petals) — correr dentro de `infra/docker/swarm-node.Dockerfile`, no en el venv liviano de este paquete.
 
 ## Setup (compare/redundancy/ledger_client — sin torch/petals)
 
@@ -43,8 +43,21 @@ verificación compiten por los mismos cores de una sola laptop — en producció
 con nodos en máquinas separadas, el efecto debería ser menor pero no
 necesariamente desaparece (la red real introduce su propia variabilidad).
 
-No resuelto todavía — ver comentario en
-[issue #4](https://github.com/lautaroda/enjambre/issues/4). Antes de confiar en
-esto para penalizar nodos de verdad, hace falta distinguir "el nodo devolvió un
-resultado distinto" de "el nodo se cayó/reintentó a mitad de la corrida" (esto
-último no debería contar como sospechoso).
+## Fix aplicado
+
+`dispatch.py` ahora captura si petals/hivemind emitieron algún warning (nivel
+`WARNING`+, ej. `MissingBlocksError` con reintento) durante cada corrida —
+filtrando por thread id, para que corridas concurrentes no se mezclen entre sí
+— y lo marca en `RunResult.had_warnings`. `RedundancyVerifier` usa esa señal
+para separar dos casos que antes se trataban igual:
+
+- **`suspect_node_ids`**: la corrida divergió y no tuvo ningún warning — sí es evidencia real de trampa.
+- **`unreliable_node_ids`**: la corrida divergió pero tuvo warnings — probablemente inestabilidad de red/carga, no trampa. No debería penalizar reputación.
+
+Validado con 3 tests nuevos que reproducen el escenario real encontrado (una
+corrida divergente con warnings, dos corridas divergentes ambas con warnings —
+el caso exacto que se dio en vivo — y un caso mixto). Pendiente: repetir la
+prueba end-to-end contra el swarm real (bloqueada temporalmente por Docker
+Desktop en esta máquina) para confirmar que la señal se captura de verdad en
+un caso real, no solo en el test sintético — ver
+[issue #4](https://github.com/lautaroda/enjambre/issues/4).

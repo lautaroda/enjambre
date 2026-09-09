@@ -76,6 +76,49 @@ def test_two_runs_that_disagree_is_inconclusive():
     verdict = RedundancyVerifier().verify(runs)
     assert verdict.credited_node_ids == set()
     assert verdict.suspect_node_ids == {"a", "b"}
+    assert verdict.unreliable_node_ids == set()
+    assert verdict.inconclusive
+
+
+def test_diverging_run_with_warnings_is_unreliable_not_suspect():
+    # Hallazgo real (issue #4): bajo contencion de carga un nodo puede caerse
+    # y volver a mitad de una corrida - esa corrida puede diverger sin que
+    # nadie haya hecho trampa. had_warnings=True es la senal de eso.
+    base = _vec(1)
+    runs = [
+        RunResult(node_ids=["a"], logits=base),
+        RunResult(node_ids=["b"], logits=base + np.random.default_rng(2).normal(scale=1e-6, size=64)),
+        RunResult(node_ids=["flaky"], logits=_vec(99), had_warnings=True),
+    ]
+    verdict = RedundancyVerifier().verify(runs)
+    assert verdict.credited_node_ids == {"a", "b"}
+    assert verdict.suspect_node_ids == set()
+    assert verdict.unreliable_node_ids == {"flaky"}
+
+
+def test_two_disagreeing_runs_both_with_warnings_are_unreliable_not_suspect():
+    # El escenario real que se dio en vivo: 2 corridas concurrentes, ambas con
+    # warnings, terminan en logits distintos - inconclusive, pero nadie deberia
+    # perder reputacion por esto.
+    runs = [
+        RunResult(node_ids=["a"], logits=_vec(1), had_warnings=True),
+        RunResult(node_ids=["b"], logits=_vec(99), had_warnings=True),
+    ]
+    verdict = RedundancyVerifier().verify(runs)
+    assert verdict.credited_node_ids == set()
+    assert verdict.suspect_node_ids == set()
+    assert verdict.unreliable_node_ids == {"a", "b"}
+    assert verdict.inconclusive
+
+
+def test_disagreeing_runs_mixed_warnings_splits_suspect_and_unreliable():
+    runs = [
+        RunResult(node_ids=["clean"], logits=_vec(1), had_warnings=False),
+        RunResult(node_ids=["flaky"], logits=_vec(99), had_warnings=True),
+    ]
+    verdict = RedundancyVerifier().verify(runs)
+    assert verdict.suspect_node_ids == {"clean"}
+    assert verdict.unreliable_node_ids == {"flaky"}
     assert verdict.inconclusive
 
 
