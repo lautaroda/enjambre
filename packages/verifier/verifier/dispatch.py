@@ -14,33 +14,39 @@ corrida a partir de una sesion de petals queda para la Verificacion Nivel 2
 """
 
 import logging
-import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from .redundancy import RunResult
 
 
-class _ThreadWarningCapture(logging.Handler):
-    """Captura warnings emitidos SOLO por el hilo que corre esta corrida
-    (filtra por thread id) - varias corridas se despachan en paralelo via
-    threads, y un logger compartido recibe records de todos los hilos a la
-    vez, no solo del propio."""
+class _WarningCapture(logging.Handler):
+    """Captura cualquier WARNING+ emitido mientras esta corrida esta en vuelo.
 
-    def __init__(self, thread_id: int):
+    Se intento primero filtrar por thread id (para aislar corridas paralelas
+    entre si), pero se verifico en vivo (forzando la caida de un nodo a mitad
+    de una corrida real) que petals/hivemind emiten sus warnings desde un
+    hilo/loop de asyncio interno DISTINTO al que llama - record.thread no
+    coincidia nunca y el filtro descartaba TODOS los warnings reales en
+    silencio. Sin filtro: si dos corridas concurrentes comparten swarm, un
+    warning de una puede marcar had_warnings=True tambien en la otra - eso es
+    sobre-atribucion, no bajo-atribucion, y para esto es el error mas seguro
+    (preferimos marcar de mas una corrida como "no confiable" antes que
+    tratar una corrida realmente inestable como si nada hubiera pasado).
+    """
+
+    def __init__(self):
         super().__init__(level=logging.WARNING)
-        self._thread_id = thread_id
         self.messages: list[str] = []
 
     def emit(self, record: logging.LogRecord) -> None:
-        if record.thread == self._thread_id:
-            self.messages.append(record.getMessage())
+        self.messages.append(record.getMessage())
 
 
 def _run_one(prompt, model_name, initial_peers, node_ids, tokenizer):
     from petals import AutoDistributedModelForCausalLM
     import torch
 
-    capture = _ThreadWarningCapture(threading.get_ident())
+    capture = _WarningCapture()
     # se engancha al logger raiz y explicitamente a hivemind/petals, por si
     # alguno de los dos desactiva propagate en su propio logger interno
     loggers = [logging.getLogger(), logging.getLogger("hivemind"), logging.getLogger("petals")]

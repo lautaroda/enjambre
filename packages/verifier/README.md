@@ -43,21 +43,36 @@ verificación compiten por los mismos cores de una sola laptop — en producció
 con nodos en máquinas separadas, el efecto debería ser menor pero no
 necesariamente desaparece (la red real introduce su propia variabilidad).
 
-## Fix aplicado
+## Fix aplicado (y su propio bug real, encontrado en vivo)
 
-`dispatch.py` ahora captura si petals/hivemind emitieron algún warning (nivel
-`WARNING`+, ej. `MissingBlocksError` con reintento) durante cada corrida —
-filtrando por thread id, para que corridas concurrentes no se mezclen entre sí
-— y lo marca en `RunResult.had_warnings`. `RedundancyVerifier` usa esa señal
-para separar dos casos que antes se trataban igual:
+`dispatch.py` captura si petals/hivemind emitieron algún warning (nivel
+`WARNING`+, ej. `MissingBlocksError` con reintento) durante cada corrida, y lo
+marca en `RunResult.had_warnings`. `RedundancyVerifier` usa esa señal para
+separar dos casos que antes se trataban igual:
 
 - **`suspect_node_ids`**: la corrida divergió y no tuvo ningún warning — sí es evidencia real de trampa.
 - **`unreliable_node_ids`**: la corrida divergió pero tuvo warnings — probablemente inestabilidad de red/carga, no trampa. No debería penalizar reputación.
 
-Validado con 3 tests nuevos que reproducen el escenario real encontrado (una
-corrida divergente con warnings, dos corridas divergentes ambas con warnings —
-el caso exacto que se dio en vivo — y un caso mixto). Pendiente: repetir la
-prueba end-to-end contra el swarm real (bloqueada temporalmente por Docker
-Desktop en esta máquina) para confirmar que la señal se captura de verdad en
-un caso real, no solo en el test sintético — ver
-[issue #4](https://github.com/lautaroda/enjambre/issues/4).
+La primera versión de este fix filtraba los warnings por thread id (para que
+corridas concurrentes no se mezclaran entre sí). Los 12 tests unitarios
+pasaban — pero probándolo en vivo forzando la caída real de un nodo a mitad de
+una corrida (`docker stop`/`docker start` sobre `node-2` mientras una
+inferencia estaba en curso), el resultado daba **`had_warnings=False`** pese a
+que el warning se veía clarito en los logs del contenedor. El filtro por
+thread id descartaba en silencio *todos* los warnings reales: petals/hivemind
+los emite desde un hilo/loop de asyncio interno, no desde el hilo que llama.
+
+Fix real: sacar el filtro por thread id, capturar cualquier warning global
+mientras la corrida está en vuelo. La contra es que, con corridas realmente
+concurrentes, un warning de una puede marcar `had_warnings=True` también en la
+otra — pero eso es sobre-atribución seguro (marcar de más como "no confiable"),
+no bajo-atribución peligrosa (tratar una corrida inestable como confiable).
+Reproducido el mismo escenario forzado con el fix aplicado:
+`RESULTADO: had_warnings=True` — confirmado con datos reales, no solo con el
+test sintético.
+
+Este es exactamente el motivo por el que valió la pena insistir en la prueba
+end-to-end contra el swarm real en vez de conformarse con los tests
+unitarios — el bug del filtro por thread id nunca iba a aparecer en un test
+sintético, porque ahí no hay ningún hilo/loop interno de petals que difiera
+del hilo que llama.
