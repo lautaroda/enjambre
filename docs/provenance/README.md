@@ -7,22 +7,12 @@ archivo quedó anclado en la blockchain de Bitcoin, lo que da una prueba
 verificable por cualquiera (no solo por GitHub) de que ese commit ya existía en
 esa fecha — sin necesidad de confiar en un tercero.
 
-## Estado actual
+## Estado actual: **confirmado**
 
-El sello (`first-commit.txt.ots`) está **enviado, pendiente de confirmación**
-en la blockchain de Bitcoin — el paso de anclado final (`upgrade`) tarda desde
-minutos hasta algunas horas/un día, según cuándo los calendar servers de
-OpenTimestamps agrupen este sello en un bloque confirmado.
-
-## Cómo finalizarlo (más adelante)
-
-```bash
-pip install opentimestamps-client
-ots upgrade docs/provenance/first-commit.txt.ots
-```
-
-Esto actualiza el `.ots` in-place con la prueba completa una vez confirmada.
-Después hay que commitear el archivo actualizado.
+El sello quedó anclado en el bloque de Bitcoin **966222**
+(`ots upgrade` → "Success! Timestamp complete"). Es una prueba completa,
+verificable por cualquiera para siempre — no depende de que GitHub, este repo,
+ni ningún calendar server de OpenTimestamps sigan existiendo.
 
 ## Cómo verificar (cualquiera, en cualquier momento)
 
@@ -32,8 +22,10 @@ ots verify docs/provenance/first-commit.txt.ots
 ```
 
 Confirma que el contenido de `first-commit.txt` (el hash de commit) existía en
-la fecha probada — independientemente de si GitHub sigue existiendo o de si
-alguien pudiera alterar metadata ahí.
+esa fecha. Necesita un nodo de Bitcoin propio para chequear el header del
+bloque de forma totalmente independiente (`--bitcoin-node <url>`); sin uno, el
+verificador web de [opentimestamps.org](https://opentimestamps.org/) hace el
+mismo chequeo contra block explorers públicos.
 
 ## Qué prueba esto y qué no
 
