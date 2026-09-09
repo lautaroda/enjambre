@@ -17,6 +17,12 @@ cloud o en la máquina de un amigo, sin que tengan que clonar nada a mano.
 Con la decisión ya tomada (cloud + amigos en paralelo): 1 VM cloud como ancla,
 + otra VM cloud y/o 1-2 amigos como nodos que se suman.
 
+**¿Tenés una máquina con GPU propia?** Es un nodo mucho más interesante que
+una VM cloud CPU-only, y de paso empieza a cubrir M0.6 (modelo grande) además
+de M0.5. Para GPU AMD/ROCm (ej. RX 5700 XT), ver
+[`docs/gpu-node-setup.md`](gpu-node-setup.md) antes de seguir con los pasos de
+abajo.
+
 ## Paso 1 — provisionar la VM ancla
 
 Una instancia chica alcanza (bloom-560m corre bien en CPU): Hetzner CX22 o
