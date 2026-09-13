@@ -50,20 +50,22 @@ def main():
             continue
 
         history += f"{user_input}\n"
+        print("swarm> ", end="", flush=True)
         try:
             response = client.generate(
                 history,
                 max_new_tokens=args.max_new_tokens,
+                stream=True,
                 temperature=args.temperature,
                 top_p=args.top_p,
                 repetition_penalty=args.repetition_penalty,
             )
         except EnjambreConnectionError as exc:
-            print(f"[error de conexión al swarm: {exc}]")
+            print(f"\n[error de conexión al swarm: {exc}]")
             continue
+        print("\n")
 
         new_text = response[len(history):] if response.startswith(history) else response
-        print(f"swarm> {new_text.strip()}\n")
         history += new_text
 
 
