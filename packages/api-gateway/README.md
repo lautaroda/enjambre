@@ -31,13 +31,29 @@ mismas razones (ver `client-sdk/README.md`).
 ## Usarlo
 
 ```bash
-aider --openai-api-base http://localhost:8000/v1 \
-      --openai-api-key enjambre \
-      --model deepseek-ai/deepseek-coder-6.7b-instruct
+cd tu-proyecto   # aider necesita un repo git, no tu home
+OPENAI_API_BASE=http://localhost:8000/v1 \
+OPENAI_API_KEY=enjambre \
+  aider --model openai/deepseek-ai/deepseek-coder-6.7b-instruct \
+        --no-show-model-warnings
 ```
+
+**El prefijo `openai/` es obligatorio.** aider usa litellm por dentro, que
+enruta según el proveedor declarado en el nombre del modelo; sin prefijo falla
+con `LLM Provider NOT provided`, aunque el endpoint sea correcto.
+`--no-show-model-warnings` calla el aviso de *context window* desconocido:
+litellm no tiene metadatos de este modelo, lo cual es inofensivo.
 
 También funciona con Continue y Cline en VS Code, y con Open WebUI. La API key
 se ignora: el gateway no autentica todavía (ver *Limitaciones*).
+
+### aider contra este swarm: expectativas realistas
+
+aider usa por defecto el formato de edición *whole*, que le pide al modelo el
+**archivo entero** en cada respuesta. Con el tope de 512 tokens eso trunca
+cualquier archivo de más de ~60 líneas, y subirlo no ayuda: a 0.83 tokens/seg,
+2000 tokens son 40 minutos. Sirve para preguntas puntuales y ediciones chicas,
+no para generar una landing page desde cero. El límite es el hardware.
 
 ## Decisiones de diseño
 
