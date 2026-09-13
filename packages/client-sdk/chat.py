@@ -23,6 +23,14 @@ def main():
     )
     parser.add_argument("--model", default="bigscience/bloom-560m")
     parser.add_argument("--max-new-tokens", type=int, default=60)
+    parser.add_argument("--temperature", type=float, default=0.8)
+    parser.add_argument("--top-p", type=float, default=0.9)
+    parser.add_argument(
+        "--repetition-penalty",
+        type=float,
+        default=1.2,
+        help="Sin esto (o en 1.0) un modelo base chico entra en loop enseguida",
+    )
     args = parser.parse_args()
 
     print(f"Conectando a {args.model} via {args.peers}...")
@@ -43,7 +51,13 @@ def main():
 
         history += f"{user_input}\n"
         try:
-            response = client.generate(history, max_new_tokens=args.max_new_tokens)
+            response = client.generate(
+                history,
+                max_new_tokens=args.max_new_tokens,
+                temperature=args.temperature,
+                top_p=args.top_p,
+                repetition_penalty=args.repetition_penalty,
+            )
         except EnjambreConnectionError as exc:
             print(f"[error de conexión al swarm: {exc}]")
             continue

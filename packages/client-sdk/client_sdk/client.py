@@ -51,19 +51,36 @@ class EnjambreClient:
             self.model_name, initial_peers=self.initial_peers
         ).eval()
 
-    def _generate_once(self, prompt: str, max_new_tokens: int) -> str:
+    def _generate_once(self, prompt: str, max_new_tokens: int, **gen_kwargs) -> str:
         inputs = self._tokenizer(prompt, return_tensors="pt")
-        outputs = self._model.generate(inputs["input_ids"], max_new_tokens=max_new_tokens)
+        outputs = self._model.generate(
+            inputs["input_ids"], max_new_tokens=max_new_tokens, **gen_kwargs
+        )
         return self._tokenizer.decode(outputs[0])
 
-    def generate(self, prompt: str, max_new_tokens: int = 20) -> str:
+    def generate(self, prompt: str, max_new_tokens: int = 20, **gen_kwargs) -> str:
         """Genera texto. Si un nodo falla a mitad de pipeline, reintenta con
         backoff exponencial (max_retries intentos) antes de levantar
         EnjambreConnectionError. petals ya reintenta internamente errores de
         red puntuales; esto cubre el caso en que esos reintentos internos no
-        alcanzan (ej. el nodo que se cayó no vuelve en el timeout de petals)."""
+        alcanzan (ej. el nodo que se cayó no vuelve en el timeout de petals).
+
+        Defaults de sampling: sin esto, generate() hace decodificación greedy y
+        un modelo base chico como bloom-560m entra en loop enseguida ("Estoy
+        bien. ¿Estás bien? Estoy bien...") - visto en la primera prueba real de
+        chat. do_sample + repetition_penalty lo corta. Cualquiera se puede
+        pisar pasandolo explicito en gen_kwargs."""
         self._load()
-        return self._with_retries(lambda: self._generate_once(prompt, max_new_tokens))
+        params = {
+            "do_sample": True,
+            "temperature": 0.8,
+            "top_p": 0.9,
+            "repetition_penalty": 1.2,
+            **gen_kwargs,
+        }
+        return self._with_retries(
+            lambda: self._generate_once(prompt, max_new_tokens, **params)
+        )
 
     def _with_retries(self, fn):
         last_error = None

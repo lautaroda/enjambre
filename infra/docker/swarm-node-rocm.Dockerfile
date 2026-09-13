@@ -34,4 +34,7 @@ RUN pip3 install --no-cache-dir --no-build-isolation \
 RUN git clone --depth 1 https://github.com/bigscience-workshop/petals.git /opt/petals \
     && pip3 install --no-cache-dir --no-build-isolation /opt/petals
 
+# Mismo parche de rope_scaling que la variante CPU (ver swarm-node.Dockerfile)
+RUN python3 -c "import pathlib,glob; f=glob.glob('/usr/local/lib/python3*/dist-packages/transformers/modeling_rope_utils.py')+glob.glob('/usr/local/lib/python3*/site-packages/transformers/modeling_rope_utils.py'); p=pathlib.Path(f[0]); s=p.read_text(); a='    if rope_scaling is None:\n        return\n'; assert a in s, 'patron no encontrado'; p.write_text(s.replace(a, a+'    if \"rope_type\" not in rope_scaling and \"type\" in rope_scaling:\n        rope_scaling[\"rope_type\"] = rope_scaling[\"type\"]\n', 1))"
+
 ENTRYPOINT ["python3", "-m", "petals.cli.run_server"]
