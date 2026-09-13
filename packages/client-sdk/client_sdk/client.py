@@ -1,5 +1,15 @@
 """SDK para pedir inferencia a la red sin hablar directo con hivemind/petals.
 
+IMPORTANTE - initial_peers en swarms chicos: hay que pasar la direccion de
+TODOS los nodos del swarm, no solo la del ancla. Encontrado en la prueba real
+de M0.5 (3 maquinas): con solo el ancla, el DHT le dice al cliente "el peer X
+sirve los bloques 8-16" pero el cliente tiene el ID del peer sin su direccion,
+y cae a resolverla via DHT FindPeer - que en un swarm de pocos nodos falla con
+`routing: not found` y la inferencia nunca arranca. Pasando todas las
+direcciones, el cliente llena su peerstore al conectar y no depende del DHT
+para eso. En un swarm grande (ej. el publico de petals) esto no hace falta
+porque el cliente termina conectado a muchos servidores igual.
+
 La carga del modelo (`_load`) importa torch/petals de forma diferida (dentro
 del metodo, no a nivel de modulo) para que la logica de reintentos/backoff se
 pueda testear sin esas dependencias pesadas instaladas - ver tests/test_client.py

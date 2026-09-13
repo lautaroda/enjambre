@@ -7,11 +7,22 @@ cada vez) y reintenta con backoff exponencial si un nodo falla a mitad de pipeli
 
 ## Uso
 
+> **Ojo con `initial_peers` en swarms chicos**: pasá la dirección de **todos**
+> los nodos, no solo la del ancla. Con solo el ancla, el cliente obtiene del
+> DHT el *ID* del peer que sirve cada rango de bloques pero no su *dirección*,
+> y al resolverla por DHT falla con `routing: not found` (en un swarm de pocos
+> nodos no hay suficiente red para resolverlo). Hallazgo real de M0.5 — ver
+> [`docs/phase0-poc-report.md`](../../docs/phase0-poc-report.md).
+
 ```python
 from client_sdk import EnjambreClient
 
 client = EnjambreClient(
-    initial_peers=["/ip4/<ip-del-ancla>/tcp/31337/p2p/<peer-id>"],
+    initial_peers=[
+        "/ip4/<ip-nodo-1>/tcp/31337/p2p/<peer-id-1>",
+        "/ip4/<ip-nodo-2>/tcp/31337/p2p/<peer-id-2>",
+        "/ip4/<ip-nodo-3>/tcp/31337/p2p/<peer-id-3>",
+    ],
     model_name="bigscience/bloom-560m",
 )
 
