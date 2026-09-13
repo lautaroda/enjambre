@@ -25,7 +25,9 @@
 #
 # Variables opcionales: MODEL (default bigscience/bloom-560m), NUM_BLOCKS (default 8,
 # ignorado con BACKEND=rocm - se auto-detecta segun VRAM salvo que lo fijes vos),
-# BACKEND (cpu default, o rocm), PORT (default 31337), REPO_DIR (default ./enjambre).
+# BLOCK_INDICES (ej. "0:8" - fija un rango exacto, mas confiable que NUM_BLOCKS
+# con varias maquinas reales, ver comentario mas abajo), BACKEND (cpu default,
+# o rocm), PORT (default 31337), REPO_DIR (default ./enjambre).
 #
 # Antes de correr el nodo ancla: abri el puerto 31337/tcp en el firewall del proveedor
 # cloud (Hetzner Cloud Firewall / DigitalOcean Cloud Firewall / ufw) - esto es especifico
@@ -73,6 +75,17 @@ else
   GPU_ARGS=()
   DEVICE_ARGS=()
   NUM_BLOCKS_ARGS=(--num_blocks "$NUM_BLOCKS")  # CPU no auto-detecta, hay que fijarlo
+fi
+
+# BLOCK_INDICES (ej. "0:8") opcional: fija un rango exacto en vez de dejar que
+# cada nodo elija con --num_blocks. Encontrado en la practica (3 maquinas
+# reales): si los nodos no pueden verificarse bien entre si (reachability
+# check fallando), el auto-balance no ve el estado real del swarm y puede
+# hacer que dos nodos elijan el MISMO rango, dejando otro rango sin nadie -
+# --block_indices explicito lo evita de raiz, al costo de coordinar a mano
+# que rangos no se pisen.
+if [ -n "${BLOCK_INDICES:-}" ]; then
+  NUM_BLOCKS_ARGS=(--block_indices "$BLOCK_INDICES")
 fi
 
 echo "Buildeando imagen ($BACKEND, puede tardar unos minutos la primera vez)..."
