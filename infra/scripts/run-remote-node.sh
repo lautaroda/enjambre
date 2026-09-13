@@ -78,27 +78,27 @@ docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 if [ "$ROLE" = "anchor" ]; then
   echo "Arrancando nodo ANCLA ($BACKEND) en :$PORT, anunciando IP publica $PUBLIC_IP..."
   docker run -d --name "$CONTAINER_NAME" --restart unless-stopped \
-    "${GPU_ARGS[@]}" \
+    ${GPU_ARGS[@]+"${GPU_ARGS[@]}"} \
     -p "$PORT:$PORT" \
     -v enjambre-node-identity:/root/.hivemind \
     "$IMAGE_TAG" \
     "$MODEL" \
     --new_swarm \
-    "${DEVICE_ARGS[@]}" \
-    "${NUM_BLOCKS_ARGS[@]}" \
+    ${DEVICE_ARGS[@]+"${DEVICE_ARGS[@]}"} \
+    ${NUM_BLOCKS_ARGS[@]+"${NUM_BLOCKS_ARGS[@]}"} \
     --identity_path /root/.hivemind/node.id \
     --host_maddrs "/ip4/0.0.0.0/tcp/$PORT" \
     --announce_maddrs "/ip4/$PUBLIC_IP/tcp/$PORT"
 else
   echo "Arrancando nodo ($BACKEND), conectando a $INITIAL_PEERS..."
   docker run -d --name "$CONTAINER_NAME" --restart unless-stopped \
-    "${GPU_ARGS[@]}" \
+    ${GPU_ARGS[@]+"${GPU_ARGS[@]}"} \
     -v enjambre-node-identity:/root/.hivemind \
     "$IMAGE_TAG" \
     "$MODEL" \
     --initial_peers "$INITIAL_PEERS" \
-    "${DEVICE_ARGS[@]}" \
-    "${NUM_BLOCKS_ARGS[@]}" \
+    ${DEVICE_ARGS[@]+"${DEVICE_ARGS[@]}"} \
+    ${NUM_BLOCKS_ARGS[@]+"${NUM_BLOCKS_ARGS[@]}"} \
     --identity_path /root/.hivemind/node.id
 fi
 
