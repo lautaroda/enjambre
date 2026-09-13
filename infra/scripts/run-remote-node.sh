@@ -96,12 +96,25 @@ docker build -f "$DOCKERFILE" -t "$IMAGE_TAG" .
 CONTAINER_NAME="enjambre-node"
 docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 
-# Cache de HuggingFace persistente. SIN esto, cada reinicio del contenedor vuelve
-# a descargar el modelo entero desde cero (el cache vive en la capa de escritura
-# del contenedor, que `docker rm` borra). Con --restart unless-stopped eso se
-# vuelve un bucle: arranca -> descarga -> algo falla -> reinicia -> descarga de
-# nuevo, para siempre. Fue exactamente el bug del 6.7B (ver docs/phase0-poc-report.md).
+# Caches persistentes. SIN esto, cada reinicio del contenedor vuelve a descargar
+# el modelo entero desde cero (el cache vive en la capa de escritura del
+# contenedor, que `docker rm` borra). Con --restart unless-stopped eso se vuelve
+# un bucle: arranca -> descarga -> algo falla -> reinicia -> descarga de nuevo,
+# para siempre. Fue exactamente el bug del 6.7B (ver docs/phase0-poc-report.md).
+#
+# Ojo con el path: el SERVIDOR de petals NO usa ~/.cache/huggingface. Usa su
+# propio directorio, `PETALS_CACHE` o ~/.cache/petals (petals.utils.disk_cache.
+# DEFAULT_CACHE_DIR), y ahi guarda tanto los pesos de los bloques como
+# `throughput_v5.json` - el resultado del benchmark de arranque, que tarda ~2
+# minutos (el speedtest de red solo tiene 60s de timeout y en una conexion lenta
+# ni termina). Montar solo el de HuggingFace no alcanza: el cliente (chat.sh) si
+# usa ~/.cache/huggingface, pero el nodo no. Se montan los dos.
+docker volume create enjambre-petals-cache >/dev/null
 docker volume create enjambre-hf-cache >/dev/null
+CACHE_ARGS=(
+  -v enjambre-petals-cache:/root/.cache/petals
+  -v enjambre-hf-cache:/root/.cache/huggingface
+)
 
 # HF_HUB_DISABLE_XET=1: `hf_xet` es el descargador nuevo de HuggingFace (activo
 # por defecto desde huggingface_hub 0.30) que baja en chunks paralelos y los
@@ -135,7 +148,7 @@ if [ "$ROLE" = "anchor" ]; then
     ${DOWNLOAD_ENV[@]+"${DOWNLOAD_ENV[@]}"} \
     -p "$PORT:$PORT" \
     -v enjambre-node-identity:/root/.hivemind \
-    -v enjambre-hf-cache:/root/.cache/huggingface \
+    ${CACHE_ARGS[@]+"${CACHE_ARGS[@]}"} \
     "$IMAGE_TAG" \
     "$MODEL" \
     --new_swarm \
@@ -163,7 +176,7 @@ else
     ${DOWNLOAD_ENV[@]+"${DOWNLOAD_ENV[@]}"} \
     -p "$PORT:$PORT" \
     -v enjambre-node-identity:/root/.hivemind \
-    -v enjambre-hf-cache:/root/.cache/huggingface \
+    ${CACHE_ARGS[@]+"${CACHE_ARGS[@]}"} \
     "$IMAGE_TAG" \
     "$MODEL" \
     --initial_peers "$INITIAL_PEERS" \

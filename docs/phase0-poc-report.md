@@ -209,7 +209,7 @@ que cada reinicio empezaba la descarga de cero.
 
 | Dónde | Qué |
 |---|---|
-| `run-remote-node.sh` | Monta `enjambre-hf-cache` — el cache sobrevive a reinicios |
+| `run-remote-node.sh` | Monta `enjambre-petals-cache` **y** `enjambre-hf-cache` — los pesos sobreviven a reinicios |
 | `run-remote-node.sh` | `HF_HUB_DISABLE_XET=1` — descarga con memoria constante |
 | `run-remote-node.sh` | `MEM_LIMIT` opcional → el OOM queda atribuido al cgroup y `OOMKilled=true` lo delata |
 | `chat.sh` | `--name enjambre-chat` + limpieza de la sesión previa — no se apilan más |
@@ -218,6 +218,27 @@ que cada reinicio empezaba la descarga de cero.
 Los tres nodos quedaron en `RestartCount=0` y `Started`. El throughput del
 Mac subió de 620 a 2733 tokens/seg por bloque en forward pass, simplemente
 por tener memoria libre.
+
+### Detalle que casi arruina el arreglo: el servidor no usa el cache de HF
+
+Montar `~/.cache/huggingface` en el nodo **no alcanza**. El servidor de petals
+usa su propio directorio (`PETALS_CACHE`, o `~/.cache/petals` por defecto —
+`petals.utils.disk_cache.DEFAULT_CACHE_DIR`). Dentro del nodo:
+
+```
+2.6G    /root/.cache/petals        <- los pesos de los bloques viven aca
+3.6G    /root/.cache/huggingface   <- esto lo usa el CLIENTE (chat.sh)
+```
+
+Con el volumen en el path equivocado, el arreglo parecía aplicado pero los
+pesos seguían en la capa efímera del contenedor. Se montan los dos volúmenes.
+
+En `~/.cache/petals` también vive `throughput_v5.json`, el resultado del
+benchmark de arranque. Sin persistirlo, cada reinicio vuelve a medir: ~2
+minutos por arranque, y en la Ubuntu el speedtest de red ni siquiera termina
+dentro de su timeout de 60s (`Network throughput is not available: speedtest
+did not finish in 60 seconds`), así que reporta un default de 100 Mbit/s que
+no refleja nada.
 
 ### Techo de recursos real (por qué el 6.7B todavía no entra)
 
