@@ -127,8 +127,152 @@ pese a que el nodo ya estaba sano y "Started".
 vaya a auto-recuperarse solo con solo esperar — reiniciarlo una vez que los
 pesos estén confirmados en caché.
 
+## M0.6 — por qué el 6.7B entraba en loop de reinicio (resuelto)
+
+Al escalar de 1.3B a `deepseek-coder-6.7b-instruct`, el Mac y la Ubuntu
+entraban en un bucle: arrancaban, anunciaban sus bloques al DHT, y morían
+~30 segundos después. Sin traceback, sin mensaje de error, `ExitCode=0` y
+`OOMKilled=false`. Parecía un problema del modelo grande. No lo era, y las
+tres pistas juntas explican por qué costó tanto verlo.
+
+### La causa: OOM global de la VM, no del contenedor
+
+La evidencia estaba en el log del kernel de la VM de Docker, no en los logs
+de Docker:
+
+```
+hf-xet-7 invoked oom-killer: gfp_mask=0x140cca, order=0, oom_score_adj=0
+oom-kill:constraint=CONSTRAINT_NONE,...,global_oom,task=python,pid=25706
+Out of memory: Killed process 25706 (python) total-vm:6541524kB anon-rss:1519700kB
+```
+
+`constraint=CONSTRAINT_NONE` + `global_oom` es la clave: el que se quedó sin
+memoria fue **el kernel de la VM entera**, no el cgroup del contenedor.
+`docker inspect` solo reporta `OOMKilled=true` cuando mata el cgroup — por eso
+decía `false`, y por eso el exit code era 0: petals vio morir a su hijo y
+cerró ordenadamente. Todo lo que Docker mostraba decía "salió solo, sin error".
+
+Se llegó ahí con:
+
+```bash
+docker run --rm --privileged --pid=host alpine \
+  sh -c "dmesg | grep -iE 'out of memory|oom.kill'"
+```
+
+**Para la próxima**: ante un contenedor que muere con `ExitCode=0` y sin
+traceback, mirar `dmesg` del host antes que nada. `OOMKilled=false` NO
+descarta un OOM.
+
+### Por qué se quedó sin memoria: sesiones de chat abandonadas
+
+`chat.sh` corría con `docker run --rm -it`. `--rm` solo borra el contenedor
+cuando el proceso **termina** — al cerrar la terminal sin salir del REPL, el
+contenedor queda vivo, bloqueado en `input()`, con el modelo y el cliente en
+RAM. Como tampoco tenía `--name`, cada chat creaba uno nuevo con nombre
+aleatorio y se apilaban invisibles:
+
+```
+magical_yonath        917.8MiB    Up 32 minutes    "python3 -u chat.py"
+xenodochial_austin    913.2MiB    Up 47 minutes    "python3 -u chat.py"
+wizardly_bose         1.527GiB    Up 50 minutes    "python3 -u chat.py"
+fervent_mcclintock    1.489GiB    Up 2 hours       "python3 -u chat.py"
+flamboyant_meninsky   752.6MiB    Up 3 hours       "python3 -c ..."
+```
+
+**5.6 GB de los 7.6 GB de la VM**, ocupados por sesiones muertas. Al
+limpiarlas, la memoria disponible pasó de 1.27 GB a 6.6 GB y el nodo arrancó
+a la primera. Confirmación de que no tenía nada que ver con el modelo: el
+**1.3B también estaba en loop** (`RestartCount=15`) con la misma firma exacta.
+
+### El gatillo: `hf_xet` bajando un shard de 10 GB
+
+Quien invocó al OOM killer fue `hf-xet`, el descargador nuevo de HuggingFace
+(activo por defecto desde `huggingface_hub` 0.30), que baja en chunks
+paralelos y los bufferea en RAM. `deepseek-coder-6.7b-instruct` tiene un
+shard de **9.98 GB** en un solo archivo — bufferearlo en una VM de 7.6 GB ya
+saturada no tenía salida. `HF_HUB_DISABLE_XET=1` vuelve al descargador
+clásico, que escribe a disco en streaming con memoria constante.
+
+### Lo que convertía un crash en un bucle infinito
+
+El nodo **no montaba ningún volumen para el cache de HuggingFace** — solo
+`/root/.hivemind` para la identidad. El cache vivía en la capa de escritura
+del contenedor. Con `--restart unless-stopped`, el ciclo era: arranca →
+descarga 10 GB → OOM → reinicia → **descarga los 10 GB otra vez** → OOM, para
+siempre. Nunca iba a converger solo.
+
+Esto también explica retroactivamente el bug de "reiniciar a mitad de la
+descarga dejó el DHT inconsistente" documentado más arriba: no era el DHT, era
+que cada reinicio empezaba la descarga de cero.
+
+### Correcciones aplicadas
+
+| Dónde | Qué |
+|---|---|
+| `run-remote-node.sh` | Monta `enjambre-hf-cache` — el cache sobrevive a reinicios |
+| `run-remote-node.sh` | `HF_HUB_DISABLE_XET=1` — descarga con memoria constante |
+| `run-remote-node.sh` | `MEM_LIMIT` opcional → el OOM queda atribuido al cgroup y `OOMKilled=true` lo delata |
+| `chat.sh` | `--name enjambre-chat` + limpieza de la sesión previa — no se apilan más |
+| `chat.sh` | `--memory 2g` — una sesión colgada no puede voltear el nodo |
+
+Los tres nodos quedaron en `RestartCount=0` y `Started`. El throughput del
+Mac subió de 620 a 2733 tokens/seg por bloque en forward pass, simplemente
+por tener memoria libre.
+
+### Techo de recursos real (por qué el 6.7B todavía no entra)
+
+Con el bug resuelto, el límite que queda es de recursos, y es medible. Lo
+llamativo: **no es falta de hardware, son los hypervisors dando la mitad**.
+
+| Máquina | RAM física | RAM que ve el nodo | Disco libre |
+|---|---|---|---|
+| Mac M4 | 16 GB | **7.7 GB** (VM de Docker Desktop) | 405 GB |
+| ASUS ROG Ally X | 24 GB | **7.6 GB** (WSL2) | 947 GB |
+| Intel i7 / Ubuntu | 15.5 GB | 15.5 GB (nativo) | **14 GB** |
+
+El 6.7B en bfloat16 son 0.40 GB por bloque × 32 bloques = **13 GB de pesos**,
+más ~1.5 GB de runtime por nodo. Contra ~19 GB disponibles hoy, queda sin
+margen — y el usuario pidió explícitamente no llevarlo al máximo. Además la
+Ubuntu tiene 14 GB de disco libre y el shard más grande pesa 9.98 GB (el repo
+completo son 27 GB porque publica `.safetensors` y `.bin` duplicados).
+
+Para que el 6.7B entre con holgura, sin comprar nada:
+
+1. **Mac**: subir la RAM de la VM en Docker Desktop (Settings → Resources) de 7.7 a ~12 GB.
+2. **ASUS**: crear `C:\Users\<usuario>\.wslconfig` con `[wsl2]` / `memory=16GB` y `wsl --shutdown`.
+3. **Ubuntu**: liberar disco (`docker system prune -a` recupera ~2.8 GB de build cache) o apuntar el cache de HF a otra partición.
+
+## Qué modelos podemos correr (y GPT-OSS)
+
+`petals` **no** sirve cualquier modelo de HuggingFace: tiene una
+implementación distribuida escrita a mano por arquitectura, y solo hay cuatro
+(`petals/models/`): **bloom, llama, falcon, mixtral**. El `model_type` del
+`config.json` tiene que ser uno de esos — no alcanza con que el modelo sea
+"parecido a Llama".
+
+Se evaluó **GPT-OSS** (que ya corre bien en la ASUS vía Ollama) y queda
+descartado para el swarm:
+
+| Modelo | `architectures` | `model_type` | ¿Sirve? |
+|---|---|---|---|
+| `openai/gpt-oss-20b` | `GptOssForCausalLM` | `gpt_oss` | ❌ |
+| `openai/gpt-oss-120b` | `GptOssForCausalLM` | `gpt_oss` | ❌ |
+| `deepseek-ai/deepseek-coder-*-instruct` | `LlamaForCausalLM` | `llama` | ✅ |
+
+Soportarlo significaría escribir `petals/models/gpt_oss/` (bloque, config y
+modelo distribuido) — es trabajo de Fase 1+, no un cambio de parámetro. Que
+GPT-OSS ande bien en la ASUS con Ollama no es contradictorio: Ollama corre el
+modelo **entero en una máquina**, que es justo lo que Enjambre no hace.
+
+Chequeo rápido antes de proponer cualquier modelo:
+
+```bash
+curl -s https://huggingface.co/<org>/<modelo>/raw/main/config.json \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)['model_type'])"
+```
+
 ## Pendiente
 
 - **M0.5b** — repetir con al menos un nodo fuera de la LAN (VM cloud o casa de un amigo) para ejercitar NAT traversal de verdad.
-- **M0.6 (completo)** — repetir con un modelo más grande (6.7B+) que realmente exija la partición entre las tres máquinas.
+- **M0.6 (completo)** — repetir con 6.7B después de subir la RAM de la VM del Mac y de WSL2 en la ASUS (ver "Techo de recursos real"). El bug que lo bloqueaba está resuelto; lo que falta es capacidad.
 - **M0.7** — recomendación go/no-go para Fase 1, con los hallazgos de M0.5b/M0.6.

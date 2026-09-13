@@ -27,7 +27,9 @@
 # ignorado con BACKEND=rocm - se auto-detecta segun VRAM salvo que lo fijes vos),
 # BLOCK_INDICES (ej. "0:8" - fija un rango exacto, mas confiable que NUM_BLOCKS
 # con varias maquinas reales, ver comentario mas abajo), BACKEND (cpu default,
-# o rocm), PORT (default 31337), REPO_DIR (default ./enjambre).
+# o rocm), PORT (default 31337), REPO_DIR (default ./enjambre),
+# MEM_LIMIT (ej. "6g" - limite de RAM del contenedor, ver mas abajo por que
+# conviene fijarlo).
 #
 # Antes de correr el nodo ancla: abri el puerto 31337/tcp en el firewall del proveedor
 # cloud (Hetzner Cloud Firewall / DigitalOcean Cloud Firewall / ufw) - esto es especifico
@@ -94,12 +96,46 @@ docker build -f "$DOCKERFILE" -t "$IMAGE_TAG" .
 CONTAINER_NAME="enjambre-node"
 docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 
+# Cache de HuggingFace persistente. SIN esto, cada reinicio del contenedor vuelve
+# a descargar el modelo entero desde cero (el cache vive en la capa de escritura
+# del contenedor, que `docker rm` borra). Con --restart unless-stopped eso se
+# vuelve un bucle: arranca -> descarga -> algo falla -> reinicia -> descarga de
+# nuevo, para siempre. Fue exactamente el bug del 6.7B (ver docs/phase0-poc-report.md).
+docker volume create enjambre-hf-cache >/dev/null
+
+# HF_HUB_DISABLE_XET=1: `hf_xet` es el descargador nuevo de HuggingFace (activo
+# por defecto desde huggingface_hub 0.30) que baja en chunks paralelos y los
+# bufferea en RAM. Con un modelo de 13GB en una maquina con poca memoria eso
+# dispara el OOM killer del kernel ANTES de cargar un solo bloque. Evidencia
+# real en el Mac (Docker Desktop, VM de 7.6GB):
+#   hf-xet-7 invoked oom-killer: ... constraint=CONSTRAINT_NONE, global_oom
+#   Out of memory: Killed process (python) total-vm:6541524kB
+# Lo confuso del caso: como el OOM fue GLOBAL de la VM (no del cgroup del
+# contenedor), `docker inspect` reporta OOMKilled=false y ExitCode=0 - parece
+# que el proceso salio solo, sin error ni traceback. El downloader clasico
+# (sin xet) escribe a disco en streaming y usa memoria constante.
+DOWNLOAD_ENV=(-e HF_HUB_DISABLE_XET=1)
+
+# MEM_LIMIT opcional pero MUY recomendado: fija un limite de cgroup al
+# contenedor. No es solo proteccion - es diagnostico. Sin limite, un pico de
+# memoria del nodo se lleva puesta la maquina entera y el kernel elige que
+# matar (arriba mato al proceso equivocado), dejando OOMKilled=false y un exit
+# code 0 que no dice nada. Con limite, el OOM queda atribuido al contenedor y
+# `docker inspect` lo reporta como OOMKilled=true, que es una pista directa.
+MEM_ARGS=()
+if [ -n "${MEM_LIMIT:-}" ]; then
+  MEM_ARGS=(--memory "$MEM_LIMIT")
+fi
+
 if [ "$ROLE" = "anchor" ]; then
   echo "Arrancando nodo ANCLA ($BACKEND) en :$PORT, anunciando IP publica $PUBLIC_IP..."
   docker run -d --name "$CONTAINER_NAME" --restart unless-stopped \
     ${GPU_ARGS[@]+"${GPU_ARGS[@]}"} \
+    ${MEM_ARGS[@]+"${MEM_ARGS[@]}"} \
+    ${DOWNLOAD_ENV[@]+"${DOWNLOAD_ENV[@]}"} \
     -p "$PORT:$PORT" \
     -v enjambre-node-identity:/root/.hivemind \
+    -v enjambre-hf-cache:/root/.cache/huggingface \
     "$IMAGE_TAG" \
     "$MODEL" \
     --new_swarm \
@@ -123,8 +159,11 @@ else
   echo "Arrancando nodo ($BACKEND), conectando a $INITIAL_PEERS..."
   docker run -d --name "$CONTAINER_NAME" --restart unless-stopped \
     ${GPU_ARGS[@]+"${GPU_ARGS[@]}"} \
+    ${MEM_ARGS[@]+"${MEM_ARGS[@]}"} \
+    ${DOWNLOAD_ENV[@]+"${DOWNLOAD_ENV[@]}"} \
     -p "$PORT:$PORT" \
     -v enjambre-node-identity:/root/.hivemind \
+    -v enjambre-hf-cache:/root/.cache/huggingface \
     "$IMAGE_TAG" \
     "$MODEL" \
     --initial_peers "$INITIAL_PEERS" \

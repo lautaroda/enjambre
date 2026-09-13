@@ -17,7 +17,7 @@
 # desactualizado en silencio.
 #
 # Variables opcionales: MAX_NEW_TOKENS (default 60), IMAGE (default
-# enjambre/swarm-node:dev).
+# enjambre/swarm-node:dev), MEM_LIMIT (default 2g).
 set -euo pipefail
 
 if [ $# -eq 0 ] || [ -z "${MODEL:-}" ]; then
@@ -31,7 +31,26 @@ fi
 
 MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-60}"
 IMAGE="${IMAGE:-enjambre/swarm-node:dev}"
+MEM_LIMIT="${MEM_LIMIT:-2g}"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+
+# --name + limpieza previa: `docker run --rm` SOLO borra el contenedor cuando el
+# proceso termina. Si cerras la terminal sin salir del REPL (Ctrl+C, cerrar la
+# ventana, perder el SSH), el contenedor NO muere: queda vivo bloqueado en
+# input(), con el modelo y el cliente cargados en RAM. Sin nombre fijo, cada
+# chat crea uno nuevo con nombre random y se van apilando invisibles.
+#
+# Bug real: cinco sesiones de chat abandonadas acumularon 5.6GB de los 7.6GB de
+# la VM de Docker Desktop en el Mac. El nodo del swarm -que corre en la misma
+# VM- empezo a morir por OOM del kernel apenas se anunciaba al DHT, entrando en
+# loop de reinicio. Como el OOM era GLOBAL de la VM y no del cgroup del nodo,
+# `docker inspect` mostraba OOMKilled=false y ExitCode=0: parecia un bug del
+# modelo grande que estabamos probando, y no tenia nada que ver.
+CHAT_CONTAINER="enjambre-chat"
+if docker ps -aq -f name="^${CHAT_CONTAINER}$" | grep -q .; then
+  echo "Habia una sesion de chat previa sin cerrar (${CHAT_CONTAINER}) - la limpio." >&2
+  docker rm -f "$CHAT_CONTAINER" >/dev/null
+fi
 
 # Volumen para el cache de HuggingFace: sin esto el modelo (~1.1GB para
 # bloom-560m, mucho mas para modelos grandes) se vuelve a bajar en cada chat,
@@ -39,7 +58,10 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 docker volume create enjambre-hf-cache >/dev/null
 
 exec docker run --rm -it \
+  --name "$CHAT_CONTAINER" \
+  --memory "$MEM_LIMIT" \
   -e PYTHONWARNINGS=ignore::FutureWarning \
+  -e HF_HUB_DISABLE_XET=1 \
   -v "$REPO_ROOT/packages/client-sdk/client_sdk:/app/client_sdk" \
   -v "$REPO_ROOT/packages/client-sdk/chat.py:/app/chat.py" \
   -v enjambre-hf-cache:/root/.cache/huggingface \
