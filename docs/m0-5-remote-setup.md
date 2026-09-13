@@ -21,7 +21,8 @@ Con la decisión ya tomada (cloud + amigos en paralelo): 1 VM cloud como ancla,
 una VM cloud CPU-only, y de paso empieza a cubrir M0.6 (modelo grande) además
 de M0.5. Para GPU AMD/ROCm (ej. RX 5700 XT), ver
 [`docs/gpu-node-setup.md`](gpu-node-setup.md) antes de seguir con los pasos de
-abajo.
+abajo. Para sumar una máquina Windows (ej. una ROG Ally X), ver
+[`docs/windows-node-setup.md`](windows-node-setup.md).
 
 ## Paso 1 — provisionar la VM ancla
 
