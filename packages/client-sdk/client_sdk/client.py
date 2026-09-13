@@ -69,9 +69,27 @@ class EnjambreClient:
         return "\n".join(m["content"] for m in messages) + "\n"
 
     def _generate_once(self, prompt: str, max_new_tokens: int, **gen_kwargs) -> str:
+        """Pasa attention_mask y pad_token_id explicitos.
+
+        Sin esto transformers escupe tres warnings por cada turno de chat
+        ("The attention mask and the pad token id were not set...", "Setting
+        `pad_token_id` to `eos_token_id`...", "The attention mask is not set and
+        cannot be inferred..."), que en un REPL tapan la respuesta del modelo.
+        No es solo ruido: deepseek-coder no define pad_token, asi que
+        transformers lo iguala al eos_token y despues no puede distinguir
+        padding real de un fin de secuencia legitimo. Pasando la mascara que el
+        tokenizer ya calcula, el problema desaparece de raiz.
+        """
         inputs = self._tokenizer(prompt, return_tensors="pt")
+        pad_id = self._tokenizer.pad_token_id
+        if pad_id is None:
+            pad_id = self._tokenizer.eos_token_id
         outputs = self._model.generate(
-            inputs["input_ids"], max_new_tokens=max_new_tokens, **gen_kwargs
+            inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+            pad_token_id=pad_id,
+            max_new_tokens=max_new_tokens,
+            **gen_kwargs,
         )
         return self._tokenizer.decode(outputs[0])
 

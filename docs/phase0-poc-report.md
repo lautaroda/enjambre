@@ -240,7 +240,40 @@ dentro de su timeout de 60s (`Network throughput is not available: speedtest
 did not finish in 60 seconds`), así que reporta un default de 100 Mbit/s que
 no refleja nada.
 
-### Techo de recursos real (por qué el 6.7B todavía no entra)
+### Confirmación: el 6.7B carga sin problemas con el arreglo aplicado
+
+Tras subir la RAM de los hypervisors (Docker Desktop 7.7 → 9.7 GB, WSL2 7.6 →
+11.7 GB) se redesplegó el mismo modelo que antes entraba en bucle:
+
+| Nodo | Bloques | Resultado |
+|---|---|---|
+| Mac (ancla) | 0:11 | `Started`, `RestartCount=0`, `OOMKilled=false` |
+| ASUS | 19:32 | `Started`, `RestartCount=0`, `OOMKilled=false` |
+
+Los dos bajaron sus ~10 GB de pesos y cargaron todos sus bloques sin un solo
+reinicio. El bug está cerrado: no era el modelo, era la memoria.
+
+### Las estimaciones de memoria eran demasiado conservadoras (mmap)
+
+Dato medido, contra-intuitivo: el Mac sirviendo **11 bloques del 6.7B** (4.5 GB
+de pesos en teoría) consume **893 MB** de RSS.
+
+```
+MEM=893.6MiB / 8GiB
+```
+
+petals mapea los pesos desde disco con `mmap` en vez de copiarlos a memoria
+anónima, así que el kernel los pagina bajo demanda y el consumo residente es
+una fracción del tamaño del modelo. Bajo presión de memoria esas páginas se
+descartan y se releen del disco — no van a swap.
+
+Consecuencia práctica: **el número que importa para dimensionar un nodo no es
+"GB de pesos" sino el disco disponible y el ancho de banda al disco.** Se le
+pueden asignar bastantes más bloques a un nodo de los que sugiere el cálculo
+de `params × bytes`. El cálculo teórico sigue sirviendo como cota superior
+segura, pero deja mucha capacidad sin usar.
+
+### Techo de recursos real (el cálculo conservador previo)
 
 Con el bug resuelto, el límite que queda es de recursos, y es medible. Lo
 llamativo: **no es falta de hardware, son los hypervisors dando la mitad**.
@@ -262,6 +295,38 @@ Para que el 6.7B entre con holgura, sin comprar nada:
 1. **Mac**: subir la RAM de la VM en Docker Desktop (Settings → Resources) de 7.7 a ~12 GB.
 2. **ASUS**: crear `C:\Users\<usuario>\.wslconfig` con `[wsl2]` / `memory=16GB` y `wsl --shutdown`.
 3. **Ubuntu**: liberar disco (`docker system prune -a` recupera ~2.8 GB de build cache) o apuntar el cache de HF a otra partición.
+
+## La red del nodo importa tanto como su CPU
+
+Midiendo por qué un nodo tardaba 3+ horas en descargar lo que otro bajaba en
+minutos, apareció algo que conviene tener en cuenta al sumar máquinas a la red:
+
+| Nodo | Enlace | Bajada real |
+|---|---|---|
+| ASUS | WiFi 5 GHz | 453 Mbit/s |
+| Ubuntu | WiFi 2.4 GHz (adaptador USB, `rt2800usb`) | **12.6 Mbit/s** |
+
+La señal del nodo lento era excelente (`-43 dBm`, `Link Quality 67/70`): no era
+distancia ni interferencia, era la banda de 2.4 GHz con un adaptador
+802.11n que negocia 65 Mb/s de enlace. La máquina tenía puerto ethernet
+(`enp8s0`) sin cable conectado.
+
+Dos consecuencias para el diseño de la red, no solo para esta prueba:
+
+1. **El arranque de un nodo es caro en red.** Bajar su porción del modelo son
+   varios GB; con 12 Mbit/s eso son horas. Un nodo que se reincorpora seguido
+   (una notebook que se suspende) puede pasar más tiempo descargando que
+   sirviendo, si el cache no persiste — de ahí que persistirlo sea crítico.
+2. **El transporte entre nodos va por ese mismo enlace**, así que la latencia
+   de cada token en el pipeline hereda el peor tramo. No alcanza con mirar
+   la CPU al decidir cuántos bloques asignar.
+
+Nota sobre la lentitud de CPU, para no confundir las dos cosas: el mismo nodo
+reportaba 56 tok/seg por bloque contra 2733 del Mac, pero eso es cómputo local
+puro (`Inference throughput`, medido sin red de por medio) y es consistente con
+lo que ya daba con el modelo chico — 203 tok/seg con bloques 3.7× más chicos.
+Es la diferencia de CPU entre un i7 de escritorio y un M4, y ningún cambio de
+red la afecta.
 
 ## Qué modelos podemos correr (y GPT-OSS)
 
