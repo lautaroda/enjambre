@@ -93,8 +93,42 @@ de M0.5). Para eso falta un nodo genuinamente fuera de la red — una VM cloud o
 la casa de alguien más. Lo que sí quedó validado: máquinas físicas distintas,
 tres sistemas operativos distintos, y red real (no localhost).
 
+## M0.6 (parcial) — Modelo de programación real ✅
+
+Se probó `deepseek-ai/deepseek-coder-1.3b-instruct` (arquitectura Llama, 24
+capas) repartido 8/8/8 entre las mismas tres máquinas. Generó código Python
+correcto y con el estilo de docstring esperado de un modelo instruct.
+
+### Bug real: `rope_scaling` con formato viejo
+
+`transformers==4.43.1` (pineado por petals) tiene una regresión: sus
+funciones `_validate_*` de RoPE leen `rope_scaling["rope_type"]` directo y
+exigen esa clave en `required_keys`, pero varios modelos Llama (deepseek-coder
+1.3b y 6.7b entre otros) usan el formato viejo `{"type": "linear"}` en vez de
+`{"rope_type": "linear"}`. `rope_config_validation()` sí tolera ambos
+formatos para su propia lectura, pero no propaga la normalización a las
+funciones que llama después → `KeyError`. Parchado en el Dockerfile
+normalizando el dict una sola vez, apenas se entra a esa validación.
+
+### Bug real (más sutil): reiniciar a mitad de una descarga dejó el DHT inconsistente
+
+Con un archivo de pesos de 2.5GB y la conexión de la Ubuntu bajando a
+~700KB/s (~55 min para el archivo completo), el contenedor se reinició antes
+de terminar de descargar. El proceso de `petals` **anuncia que se une al DHT
+antes de terminar de cargar los pesos** — quedó "Announced" pero nunca
+"Started" ni "Loaded block N". Dejar que la descarga terminara en background
+no alcanzó: el nodo necesitó un **reinicio limpio adicional** (ahora con los
+pesos ya en caché, casi instantáneo) para que el anuncio del DHT quedara
+consistente y el resto del swarm pudiera encontrarlo. Sin ese segundo
+reinicio, la generación fallaba con `MissingBlocksError` indefinidamente
+pese a que el nodo ya estaba sano y "Started".
+
+**Para próxima vez**: no confiar en que un nodo cuya descarga se interrumpió
+vaya a auto-recuperarse solo con solo esperar — reiniciarlo una vez que los
+pesos estén confirmados en caché.
+
 ## Pendiente
 
 - **M0.5b** — repetir con al menos un nodo fuera de la LAN (VM cloud o casa de un amigo) para ejercitar NAT traversal de verdad.
-- **M0.6** — repetir con un modelo que justifique partición real (Llama-2-7B o similar).
+- **M0.6 (completo)** — repetir con un modelo más grande (6.7B+) que realmente exija la partición entre las tres máquinas.
 - **M0.7** — recomendación go/no-go para Fase 1, con los hallazgos de M0.5b/M0.6.
