@@ -13,6 +13,12 @@
 #   es justo lo que el NAT traversal de hivemind esta pensado para resolver):
 #     ROLE=follower INITIAL_PEERS=/ip4/1.2.3.4/tcp/31337/p2p/<peer-id-del-ancla> ./run-remote-node.sh
 #
+#   Si esta maquina SI tiene una IP alcanzable por el resto (ej. misma LAN que
+#   el ancla, o puerto ya forwardeado), agregar SELF_IP para que se anuncie
+#   correctamente - sin esto, hivemind puede auto-anunciar la IP interna del
+#   contenedor de Docker, no ruteable desde otra maquina:
+#     ROLE=follower SELF_IP=192.168.1.50 INITIAL_PEERS=/ip4/1.2.3.4/tcp/31337/p2p/<peer-id> ./run-remote-node.sh
+#
 #   Con GPU AMD/ROCm (ej. RX 5700 XT) - agregar BACKEND=rocm. El host Ubuntu
 #   necesita el driver de ROCm instalado antes (ver docs/gpu-node-setup.md):
 #     BACKEND=rocm ROLE=anchor PUBLIC_IP=1.2.3.4 ./run-remote-node.sh
@@ -90,16 +96,30 @@ if [ "$ROLE" = "anchor" ]; then
     --host_maddrs "/ip4/0.0.0.0/tcp/$PORT" \
     --announce_maddrs "/ip4/$PUBLIC_IP/tcp/$PORT"
 else
+  # SELF_IP opcional: si esta maquina tiene una IP alcanzable por el resto
+  # (misma LAN, o puerto ya forwardeado en el router), avisarla explicito
+  # evita que hivemind se auto-anuncie con la IP interna del contenedor de
+  # Docker (no ruteable desde otra maquina). Sin SELF_IP, para alguien
+  # realmente detras de NAT domestico, hivemind cae al relay automatico -
+  # sigue sin necesitar puerto abierto, pero conviene igual publicar el
+  # puerto localmente para casos mixtos.
+  ANNOUNCE_ARGS=()
+  if [ -n "${SELF_IP:-}" ]; then
+    ANNOUNCE_ARGS=(--announce_maddrs "/ip4/$SELF_IP/tcp/$PORT")
+  fi
   echo "Arrancando nodo ($BACKEND), conectando a $INITIAL_PEERS..."
   docker run -d --name "$CONTAINER_NAME" --restart unless-stopped \
     ${GPU_ARGS[@]+"${GPU_ARGS[@]}"} \
+    -p "$PORT:$PORT" \
     -v enjambre-node-identity:/root/.hivemind \
     "$IMAGE_TAG" \
     "$MODEL" \
     --initial_peers "$INITIAL_PEERS" \
     ${DEVICE_ARGS[@]+"${DEVICE_ARGS[@]}"} \
     ${NUM_BLOCKS_ARGS[@]+"${NUM_BLOCKS_ARGS[@]}"} \
-    --identity_path /root/.hivemind/node.id
+    --identity_path /root/.hivemind/node.id \
+    --host_maddrs "/ip4/0.0.0.0/tcp/$PORT" \
+    ${ANNOUNCE_ARGS[@]+"${ANNOUNCE_ARGS[@]}"}
 fi
 
 echo ""
