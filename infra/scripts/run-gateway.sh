@@ -20,7 +20,10 @@
 #     -d '{"model":"x","messages":[{"role":"user","content":"hola"}]}'
 #
 # Variables opcionales: PORT (8000), MAX_TOKENS (512), IMAGE
-# (enjambre/swarm-node:dev), MEM_LIMIT (3g).
+# (enjambre/swarm-node:dev), MEM_LIMIT (6g - el cliente de petals retiene
+# buffers del prompt y crecen con cada reintento interno ante un fallo
+# transitorio del lado del servidor; con prompts largos (miles de tokens,
+# tipicos de aider) 3g no alcanzo y el propio gateway termino OOMKilled=true).
 set -euo pipefail
 
 if [ $# -eq 0 ] || [ -z "${MODEL:-}" ]; then
@@ -32,7 +35,7 @@ fi
 PORT="${PORT:-8000}"
 MAX_TOKENS="${MAX_TOKENS:-512}"
 IMAGE="${IMAGE:-enjambre/swarm-node:dev}"
-MEM_LIMIT="${MEM_LIMIT:-3g}"
+MEM_LIMIT="${MEM_LIMIT:-6g}"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 PEERS="$(IFS=,; echo "$*")"

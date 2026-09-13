@@ -29,7 +29,10 @@
 # con varias maquinas reales, ver comentario mas abajo), BACKEND (cpu default,
 # o rocm), PORT (default 31337), REPO_DIR (default ./enjambre),
 # MEM_LIMIT (ej. "6g" - limite de RAM del contenedor, ver mas abajo por que
-# conviene fijarlo).
+# conviene fijarlo), INFERENCE_MAX_LENGTH, ATTN_CACHE_TOKENS y MAX_BATCH_SIZE
+# (largo maximo de secuencia, cache de atencion y tamaño de batch - el default
+# de petals para modelos sin multi-query attention es 2048 en los tres, muy
+# poco para aider y similares).
 #
 # Antes de correr el nodo ancla: abri el puerto 31337/tcp en el firewall del proveedor
 # cloud (Hetzner Cloud Firewall / DigitalOcean Cloud Firewall / ufw) - esto es especifico
@@ -140,11 +143,64 @@ if [ -n "${MEM_LIMIT:-}" ]; then
   MEM_ARGS=(--memory "$MEM_LIMIT")
 fi
 
+# Largo maximo de secuencia, cache de atencion y tamaño de batch.
+#
+# petals elige TRES defaults distintos segun el tipo de atencion del modelo:
+# 8192/16384/8192 (inference_max_length/attn_cache_tokens/max_batch_size) si
+# usa multi-query attention (Llama 2, Falcon), y 2048/4096/2048 para el resto.
+# deepseek-coder esta basado en Llama 1 (32 cabezas de query y 32 de
+# key/value, sin GQA), asi que cae en "el resto" y queda en 2048 en los tres -
+# aunque el modelo soporta 16384 de contexto.
+#
+# Los tres hacen falta a la vez para que un prompt largo funcione, y fallan en
+# ORDEN, cada uno tapando al siguiente - se encontraron uno por uno subiendo
+# solo el primero y probando de nuevo:
+#
+#   1) inference_max_length muy chico -> ValueError: Cannot allocate KV cache
+#      for 2611 tokens, max = 2048
+#   2) con eso resuelto, attn_cache_tokens (el tamaño real reservado) puede
+#      seguir chico y dar el mismo error con otro numero
+#   3) con el cache ya resuelto (alloc_done exitoso), max_batch_size sigue
+#      limitando el PREFILL - el paso que procesa el prompt entero de una
+#      pasada - y tira ValueError: Task size greater than max_batch_size
+#      (2048), it can't be processed
+#
+# 2048 es muy poco para herramientas reales: aider manda su system prompt mas
+# el contexto del repo y ya arranca en ~2600 tokens.
+#
+# El costo de subir attn_cache_tokens es memoria, lineal con los tokens y con
+# la cantidad de bloques del nodo (medido: 1.75 GiB para 14 bloques del 6.7B
+# con 8192 tokens, ~225 KB por token por cada 14 bloques). Por eso los tres
+# quedan configurables y no fijos: un nodo chico no deberia pagar eso.
+SEQ_ARGS=()
+if [ -n "${INFERENCE_MAX_LENGTH:-}" ]; then
+  SEQ_ARGS+=(--inference_max_length "$INFERENCE_MAX_LENGTH")
+fi
+if [ -n "${ATTN_CACHE_TOKENS:-}" ]; then
+  SEQ_ARGS+=(--attn_cache_tokens "$ATTN_CACHE_TOKENS")
+fi
+if [ -n "${MAX_BATCH_SIZE:-}" ]; then
+  SEQ_ARGS+=(--max_batch_size "$MAX_BATCH_SIZE")
+fi
+
+# /dev/shm de Docker (64 MiB por defecto) - un cuarto limite en la misma
+# cadena, este no es de petals sino del propio Docker. El nodo pasa los
+# tensores de activacion entre su proceso principal y el pool de inferencia
+# via memoria compartida (torch._share_filename_cpu_); con max_batch_size en
+# 8192 el tensor no entra en 64 MiB y el nodo tira, ya con el batch aceptado:
+#
+#   RuntimeError: unable to allocate shared memory(shm) for file
+#   </torch_95_4117754786_4>: No space left on device (28)
+#
+# --shm-size sube ese limite. 1g alcanza de sobra para un batch de 8192.
+SHM_ARGS=(--shm-size "${SHM_SIZE:-1g}")
+
 if [ "$ROLE" = "anchor" ]; then
   echo "Arrancando nodo ANCLA ($BACKEND) en :$PORT, anunciando IP publica $PUBLIC_IP..."
   docker run -d --name "$CONTAINER_NAME" --restart unless-stopped \
     ${GPU_ARGS[@]+"${GPU_ARGS[@]}"} \
     ${MEM_ARGS[@]+"${MEM_ARGS[@]}"} \
+    ${SHM_ARGS[@]+"${SHM_ARGS[@]}"} \
     ${DOWNLOAD_ENV[@]+"${DOWNLOAD_ENV[@]}"} \
     -p "$PORT:$PORT" \
     -v enjambre-node-identity:/root/.hivemind \
@@ -154,6 +210,7 @@ if [ "$ROLE" = "anchor" ]; then
     --new_swarm \
     ${DEVICE_ARGS[@]+"${DEVICE_ARGS[@]}"} \
     ${NUM_BLOCKS_ARGS[@]+"${NUM_BLOCKS_ARGS[@]}"} \
+    ${SEQ_ARGS[@]+"${SEQ_ARGS[@]}"} \
     --identity_path /root/.hivemind/node.id \
     --host_maddrs "/ip4/0.0.0.0/tcp/$PORT" \
     --announce_maddrs "/ip4/$PUBLIC_IP/tcp/$PORT"
@@ -173,6 +230,7 @@ else
   docker run -d --name "$CONTAINER_NAME" --restart unless-stopped \
     ${GPU_ARGS[@]+"${GPU_ARGS[@]}"} \
     ${MEM_ARGS[@]+"${MEM_ARGS[@]}"} \
+    ${SHM_ARGS[@]+"${SHM_ARGS[@]}"} \
     ${DOWNLOAD_ENV[@]+"${DOWNLOAD_ENV[@]}"} \
     -p "$PORT:$PORT" \
     -v enjambre-node-identity:/root/.hivemind \
@@ -182,6 +240,7 @@ else
     --initial_peers "$INITIAL_PEERS" \
     ${DEVICE_ARGS[@]+"${DEVICE_ARGS[@]}"} \
     ${NUM_BLOCKS_ARGS[@]+"${NUM_BLOCKS_ARGS[@]}"} \
+    ${SEQ_ARGS[@]+"${SEQ_ARGS[@]}"} \
     --identity_path /root/.hivemind/node.id \
     --host_maddrs "/ip4/0.0.0.0/tcp/$PORT" \
     ${ANNOUNCE_ARGS[@]+"${ANNOUNCE_ARGS[@]}"}

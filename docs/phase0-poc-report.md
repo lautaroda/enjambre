@@ -296,6 +296,74 @@ Para que el 6.7B entre con holgura, sin comprar nada:
 2. **ASUS**: crear `C:\Users\<usuario>\.wslconfig` con `[wsl2]` / `memory=16GB` y `wsl --shutdown`.
 3. **Ubuntu**: liberar disco (`docker system prune -a` recupera ~2.8 GB de build cache) o apuntar el cache de HF a otra partición.
 
+## Tres límites de contexto ocultos, encadenados (aider no arrancaba)
+
+Al apuntar aider al gateway, la primera consulta moría del lado del servidor
+sin que aider mostrara ningún error claro — solo `Waiting for...` colgado.
+La causa: petals elige **tres** valores por defecto según el tipo de atención
+del modelo (multi-query attention como Llama 2/Falcon vs. el resto), y
+`deepseek-coder` (basado en Llama 1, sin GQA) cae en "el resto":
+
+| Flag | Default con MQA | Default sin MQA (deepseek-coder) |
+|---|---|---|
+| `--inference_max_length` | 8192 | **2048** |
+| `--attn_cache_tokens` | 16384 | **4096** |
+| `--max_batch_size` | 8192 | **2048** |
+
+2048 alcanza apenas para una consulta corta — el system prompt de aider más
+el contexto del repo ya suman ~2600 tokens. Los tres fallan **en cadena**,
+cada uno tapando al siguiente, así que se encontraron uno por uno subiendo
+solo el primero y reintentando:
+
+```
+1) inference_max_length chico -> ValueError: Cannot allocate KV cache
+   for 2611 tokens, max = 2048
+2) (resuelto) attn_cache_tokens chico -> mismo error, otro número
+3) (resuelto) max_batch_size sigue limitando el PREFILL (el prompt
+   completo se procesa de una pasada) -> ValueError: Task size greater
+   than max_batch_size (2048), it can't be processed
+```
+
+Con los tres en 8192, el cache de atención pasó a **1.75 GiB** en el nodo de
+14 bloques y **2.25 GiB** en el de 18 — confirma el cálculo de ~225 KB por
+token cada 14 bloques. Quedaron configurables en `run-remote-node.sh`
+(`INFERENCE_MAX_LENGTH`, `ATTN_CACHE_TOKENS`, `MAX_BATCH_SIZE`) y no fijos,
+porque un nodo chico no debería pagar esa memoria si no la necesita.
+
+Y había un **cuarto** límite en la misma cadena, este no de petals sino de
+Docker: con los tres anteriores resueltos, el nodo pasó a fallar con
+
+```
+RuntimeError: unable to allocate shared memory(shm) for file
+</torch_95_4117754786_4>: No space left on device (28)
+```
+
+El nodo pasa los tensores de activación entre su proceso principal y el pool
+de inferencia vía memoria compartida (`torch._share_filename_cpu_`), y
+`/dev/shm` en un contenedor Docker es **64 MiB por defecto** — no alcanza para
+un tensor de un batch de 8192 tokens. `--shm-size 1g` lo resuelve; quedó en
+`run-remote-node.sh` como default (`SHM_SIZE`, configurable).
+
+Y un **quinto** eslabón, ya no en los nodos sino en el propio `api-gateway`:
+con los cuatro anteriores resueltos, el contenedor del gateway terminó con
+
+```
+ExitCode=137 OOMKilled=true
+```
+
+El cliente de petals que corre dentro del gateway retiene buffers del prompt
+mientras dura la sesión de inferencia, y cada reintento interno ante un fallo
+transitorio del lado del servidor (los cuatro de arriba generaron varios,
+mientras se iban resolviendo uno por uno) suma más. Con un prompt de ~3000
+tokens el límite de memoria que traía el gateway por defecto (3g) no alcanzó.
+Se subió el default a **6g** en `run-gateway.sh`.
+
+Con los cinco resueltos, un prompt de **4999 tokens** —bastante más que el
+orden de magnitud real de lo que manda aider— se procesó sin errores de
+principio a fin en 375s. Verificación no ambigua: el prompt contenía
+exactamente 320 funciones definidas y la respuesta fue "320", lo que confirma
+que el swarm vio el prompt completo y no una versión truncada.
+
 ## La red del nodo importa tanto como su CPU
 
 Midiendo por qué un nodo tardaba 3+ horas en descargar lo que otro bajaba en
