@@ -16,11 +16,77 @@ pueda testear sin esas dependencias pesadas instaladas - ver tests/test_client.p
 y el README de este paquete.
 """
 
+import json
 import time
 
 
 class EnjambreConnectionError(Exception):
     """No se pudo completar la generación tras los reintentos configurados."""
+
+
+def byte_fallback_token_ids(added_tokens: list[dict]) -> list[int]:
+    """IDs de los "added tokens" que en realidad son bytes crudos, no texto.
+
+    El tokenizer de deepseek-coder registra 13 tokens (32000-32012) cuyo
+    contenido es un caracter Latin-1 suelto ('ú', 'ü', 'Á', 'ö'...) pero que
+    NO representan esa letra: son el respaldo a nivel byte del vocabulario
+    (el token 'ú' vale el byte 0xFA). El problema es que el matcher de added
+    tokens los busca como texto literal ANTES de aplicar BPE, asi que al
+    escribir "número" la 'ú' se mapea al token 32007 y al decodificar sale el
+    byte 0xFA suelto, que es UTF-8 invalido -> 'n�mero'.
+
+    Esto corrompe el texto **antes de que el modelo lo vea**, no solo la
+    salida. Verificado con un ida y vuelta puro del tokenizer, sin modelo:
+
+        'números únicos, pingüino, Álvaro'  ->  'n?meros ?nicos, ping?ino, ?lvaro'
+
+    Afecta a u-acento, dieresis y A-acento mayuscula, entre otros; a-e-i-o
+    acentuadas y enie no estan en la lista y funcionan bien. Pasa igual con
+    el tokenizer rapido y con el lento, asi que no es un bug de implementacion
+    sino de como vienen declarados los tokens.
+
+    El criterio para identificarlos es preciso: no son especiales, miden un
+    solo caracter, y ese caracter cae en el suplemento Latin-1 (128-255).
+    Ningun token legitimo cumple las tres cosas - los de verdad
+    ('<|EOT|>', '<pad>', '<|Assistant|>') miden 5 caracteres o mas.
+
+    Se expone aparte de la lógica que lo aplica para poder testear la regla
+    sin cargar un tokenizer real."""
+    ids = []
+    for tok in added_tokens:
+        content = tok.get("content", "")
+        if tok.get("special", False):
+            continue
+        if len(content) == 1 and 128 <= ord(content) <= 255:
+            ids.append(tok["id"])
+    return ids
+
+
+def strip_byte_fallback_tokens(tokenizer) -> int:
+    """Saca del matcher los tokens que documenta byte_fallback_token_ids.
+
+    Sin ellos el texto cae al BPE normal del vocabulario base, que si maneja
+    bien los bytes multibyte de UTF-8. Devuelve cuantos se sacaron (0 si el
+    tokenizer no los tiene o no es de los rapidos, en cuyo caso no hace nada).
+    """
+    fast = getattr(tokenizer, "_tokenizer", None)
+    if fast is None:  # tokenizer lento: no expone el matcher, se deja como esta
+        return 0
+    try:
+        import tokenizers
+
+        data = json.loads(fast.to_str())
+        added = data.get("added_tokens", [])
+        malos = set(byte_fallback_token_ids(added))
+        if not malos:
+            return 0
+        data["added_tokens"] = [t for t in added if t["id"] not in malos]
+        tokenizer._tokenizer = tokenizers.Tokenizer.from_str(json.dumps(data))
+        return len(malos)
+    except Exception:
+        # Nunca romper la carga del modelo por esto: en el peor caso quedan
+        # los acentos rotos, que es mucho mejor que no poder usar la red.
+        return 0
 
 
 class EnjambreClient:
@@ -47,9 +113,30 @@ class EnjambreClient:
         from transformers import AutoTokenizer
 
         self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        # Ver strip_byte_fallback_tokens: sin esto el tokenizer de
+        # deepseek-coder rompe los acentos del español antes de que el
+        # modelo vea el texto.
+        self.stripped_byte_tokens = strip_byte_fallback_tokens(self._tokenizer)
         self._model = AutoDistributedModelForCausalLM.from_pretrained(
             self.model_name, initial_peers=self.initial_peers
         ).eval()
+
+    @property
+    def tokenizer(self):
+        """Tokenizer ya cargado (dispara la carga si hace falta).
+
+        Lo necesita quien tenga que contar tokens o construir un streamer
+        propio - por ejemplo el api-gateway, que reporta `usage` al estilo
+        OpenAI y emite deltas token a token, dos cosas que `generate()` no
+        expone."""
+        self._load()
+        return self._tokenizer
+
+    @property
+    def model(self):
+        """Modelo distribuido ya cargado (dispara la carga si hace falta)."""
+        self._load()
+        return self._model
 
     def format_chat(self, messages: list[dict]) -> str:
         """Arma el prompt final a partir de una lista de mensajes

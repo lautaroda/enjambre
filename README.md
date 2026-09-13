@@ -22,6 +22,7 @@ packages/
   ledger-daemon/        créditos simples, sin blockchain (Fase 1)
   contracts/            Solidity/Foundry — pagos e incentivos (Fase 2/3)
   client-sdk/           SDK para pedir inferencia a la red (Fase 1+)
+  api-gateway/          API compatible con OpenAI (aider, Continue, Open WebUI)
   shared/               esquemas compartidos
 infra/                  Docker, docker-compose, scripts
 benchmarks/             harness de corrección y latencia
