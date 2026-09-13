@@ -22,7 +22,7 @@ def main():
         "--peers", required=True, nargs="+", help="multiaddr(s) de initial_peers del swarm"
     )
     parser.add_argument("--model", default="bigscience/bloom-560m")
-    parser.add_argument("--max-new-tokens", type=int, default=60)
+    parser.add_argument("--max-new-tokens", type=int, default=200)
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-p", type=float, default=0.9)
     parser.add_argument(
@@ -36,7 +36,7 @@ def main():
     print(f"Conectando a {args.model} via {args.peers}...")
     client = EnjambreClient(initial_peers=args.peers, model_name=args.model)
 
-    history = ""
+    messages = []
     print("Chat con el swarm de Enjambre. 'salir' o Ctrl+C para terminar.\n")
     while True:
         try:
@@ -49,11 +49,12 @@ def main():
         if not user_input:
             continue
 
-        history += f"{user_input}\n"
+        messages.append({"role": "user", "content": user_input})
+        prompt = client.format_chat(messages)
         print("swarm> ", end="", flush=True)
         try:
             response = client.generate(
-                history,
+                prompt,
                 max_new_tokens=args.max_new_tokens,
                 stream=True,
                 temperature=args.temperature,
@@ -62,11 +63,12 @@ def main():
             )
         except EnjambreConnectionError as exc:
             print(f"\n[error de conexión al swarm: {exc}]")
+            messages.pop()  # no se pudo responder, no lo dejamos en el historial
             continue
         print("\n")
 
-        new_text = response[len(history):] if response.startswith(history) else response
-        history += new_text
+        new_text = response[len(prompt):] if response.startswith(prompt) else response
+        messages.append({"role": "assistant", "content": new_text.strip()})
 
 
 if __name__ == "__main__":

@@ -51,6 +51,23 @@ class EnjambreClient:
             self.model_name, initial_peers=self.initial_peers
         ).eval()
 
+    def format_chat(self, messages: list[dict]) -> str:
+        """Arma el prompt final a partir de una lista de mensajes
+        {role, content}, usando la chat_template propia del tokenizer si el
+        modelo tiene una definida - asi el modelo ve el formato con el que
+        fue afinado. Encontrado real: deepseek-coder-instruct espera un
+        formato especifico ("### Instruction:" / "### Response:" + un system
+        prompt fijo), no texto plano concatenado - sin esto las respuestas
+        salian entrecortadas, no por ser un modelo chico sino por el prompt
+        mal formado. Si el modelo no tiene chat_template (ej. un modelo base
+        como bloom-560m), cae a concatenar el contenido de los mensajes."""
+        self._load()
+        if getattr(self._tokenizer, "chat_template", None):
+            return self._tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+        return "\n".join(m["content"] for m in messages) + "\n"
+
     def _generate_once(self, prompt: str, max_new_tokens: int, **gen_kwargs) -> str:
         inputs = self._tokenizer(prompt, return_tensors="pt")
         outputs = self._model.generate(
